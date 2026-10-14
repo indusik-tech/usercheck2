@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Чекер 5-буквенных ников</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{
+  --bg:var(--tg-theme-bg-color,#fff);
+  --text:var(--tg-theme-text-color,#111);
+  --hint:var(--tg-theme-hint-color,#8a8a8a);
+  --btn:var(--tg-theme-button-color,#3390ec);
+  --btn-text:var(--tg-theme-button-text-color,#fff);
+  --card:var(--tg-theme-secondary-bg-color,#f2f2f2);
+}
+*{box-sizing:border-box}
+body{margin:0;padding:14px 14px 40px;font:15px/1.45 -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--text)}
+h1{font-size:18px;margin:4px 0}
+.hint{color:var(--hint);font-size:13px;margin-bottom:10px}
+textarea{width:100%;min-height:110px;padding:10px;border-radius:12px;border:1px solid var(--hint);background:var(--card);color:var(--text);font:14px/1.5 ui-monospace,monospace;resize:vertical}
+.row{display:flex;gap:8px;margin:12px 0}
+button{flex:1;border:0;border-radius:12px;padding:12px;font-size:15px;font-weight:600;background:var(--btn);color:var(--btn-text);cursor:pointer}
+button.sec{background:var(--card);color:var(--text)}
+button:disabled{opacity:.5}
+#stats{margin:8px 0;color:var(--hint);font-size:14px;white-space:pre-line}
+.item{display:flex;justify-content:space-between;gap:8px;align-items:center;background:var(--card);border-radius:10px;padding:9px 12px;margin-bottom:6px;font-family:ui-monospace,monospace}
+.item small{color:var(--hint);display:block;font-size:11px}
+.badge{white-space:nowrap;font-size:13px}
+.free{color:#2ecc71;font-weight:700}
+.taken{color:#e74c3c}
+.amb{color:#f39c12}
+</style>
+</head>
+<body>
+<h1>Проверка 5-буквенных ников</h1>
+<div class="hint">только строчные a-z · по одному в строке или через запятую · до 30 за раз</div>
+<textarea id="inp" placeholder="pride
+ghost
+neonx"></textarea>
+<div class="row">
+  <button id="go">Проверить</button>
+  <button id="rnd" class="sec">🎲 10 случайных</button>
+</div>
+<div id="stats"></div>
+<div id="list"></div>
+<div class="row" id="copyRow" style="display:none">
+  <button id="copy" class="sec">📋 Скопировать свободные</button>
+</div>
+<script>
+const BOT_TOKEN = '8841347050:AAEczzn1bGrSoTeO11RFB_ji9zRWUW5TfUA';
+
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const $ = id => document.getElementById(id);
+const cache = new Map();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const hasToken = BOT_TOKEN.trim().length > 20;
+let lastFree = [];
+
+if (!hasToken) $('stats').textContent = '⚠️ Токен не указан — работаю через t.me (медленнее и менее надёжно)';
+
+const valid = n => /^[a-z]{5}$/.test(n);
+
+async function checkBotApi(name) {
+  const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getChat?chat_id=${encodeURIComponent('@' + name)}`);
+  const d = await r.json();
+  if (d.ok) return { status: 'taken' };
+  const desc = (d.description || '').toLowerCase();
+  if (desc.includes('not found')) return { status: 'free' };
+  if (desc.includes('too many requests')) return { status: 'error', note: 'лимит запросов, подожди минуту' };
+  return { status: 'unknown', note: d.description };
+}
+
+async function checkTme(name) {
+  const u = 'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://t.me/' + name);
+  const r = await fetch(u);
+  if (!r.ok) return { status: 'unknown' };
+  const html = await r.text();
+  if (/you can contact/i.test(html)) return { status: 'free' };
+  if (/tgme_page_title|tgme_channel_info/i.test(html)) return { status: 'taken' };
+  return { status: 'unknown' };
+}
+
+async function checkOne(name) {
+  if (cache.has(name)) return cache.get(name);
+  let res;
+  try { res = hasToken ? await checkBotApi(name) : await checkTme(name); }
+  catch { res = { status: 'error', note: 'нет ответа' }; }
+  res.name = name;
+  if (res.status === 'free' || res.status === 'taken') cache.set(name, res);
+  return res;
+}
+
+const rndName = () => Array.from({ length: 5 }, () => 'abcdefghijklmnopqrstuvwxyz'[Math.random() * 26 | 0]).join('');
+$('rnd').onclick = () => { $('inp').value = Array.from({ length: 10 }, rndName).join('\n'); };
+
+$('go').onclick = async () => {
+  const names = [...new Set($('inp').value.split(/[\s,;]+/).map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean))].slice(0, 30);
+  if (!names.length) return;
+  $('go').disabled = true; $('list').innerHTML = ''; $('copyRow').style.display = 'none';
+  $('stats').textContent = 'Проверяю…';
+  const results = [];
+  for (const n of names) {
+    results.push(valid(n) ? await checkOne(n) : { name: n, status: 'invalid', note: 'нужно ровно 5 строчных букв a-z' });
+    await sleep(hasToken ? 250 : 700);
+  }
+  render(results);
+  $('go').disabled = false;
+};
+
+function render(results) {
+  const map = {
+    free: ['🟢 свободен', 'free'],
+    taken: ['🔴 занят', 'taken'],
+    unknown: ['🟡 непонятно', 'amb'],
+    invalid: ['⚪ некорректен', ''],
+    error: ['❔ ошибка', '']
+  };
+  lastFree = results.filter(r => r.status === 'free').map(r => r.name);
+  $('list').innerHTML = results.map(r => {
+    const [txt, cls] = map[r.status] || [r.status, ''];
+    return `<div class="item"><span>@${r.name}${r.note ? `<small>${r.note}</small>` : ''}</span><span class="badge ${cls}">${txt}</span></div>`;
+  }).join('');
+  $('stats').textContent = `Всего: ${results.length} · свободно: ${lastFree.length} · занято: ${results.filter(r => r.status === 'taken').length}`;
+  $('copyRow').style.display = lastFree.length ? 'flex' : 'none';
+  tg?.HapticFeedback?.notificationOccurred(lastFree.length ? 'success' : 'error');
+}
+
+$('copy').onclick = () => {
+  const text = lastFree.join('\n');
+  tg?.clipboard ? tg.clipboard.writeText(text) : navigator.clipboard?.writeText(text);
+  $('copy').textContent = '✅ Скопировано';
+  setTimeout(() => $('copy').textContent = '📋 Скопировать свободные', 1200);
+};
+</script>
+</body>
+</html>
